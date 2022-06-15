@@ -8,6 +8,7 @@ FPGA_ARCH = artyx7
 SYN_FILES = rtl/fpga.v
 SYN_FILES += rtl/fpga_core.v
 SYN_FILES += rtl/debounce_switch.v
+SYN_FILES += rtl/mdio_master.v
 SYN_FILES += rtl/sync_signal.v
 SYN_FILES += lib/eth/rtl/iddr.v
 SYN_FILES += lib/eth/rtl/oddr.v

@@ -50,6 +50,9 @@ module fpga (
     output wire       phy_reset_n,
     input  wire       phy_int_n,
 
+    inout  wire       phy_mdio,
+    output wire       phy_mdc,
+
     /*
      * UART: 500000 bps, 8N1
      */
@@ -70,7 +73,7 @@ wire clk_200mhz_mmcm_out;
 wire clk_200mhz_int;
 
 wire rst_int;
-wire mmcm_rst = 0'b0;
+wire mmcm_rst = 1'b1;
 wire mmcm_locked;
 wire mmcm_clkfb;
 
@@ -91,6 +94,7 @@ clk_ibufg_inst(
 // CLKIN1_PERIOD 10.0
 // CLKIN2_PERIOD 10.0
 // DIVCLK_DIVIDE 1
+// CLKFBOUT_MULT_F 10.0
 
 MMCME2_BASE #(
     .BANDWIDTH("OPTIMIZED"),
@@ -170,6 +174,154 @@ sync_reset_inst (
     .rst(~mmcm_locked),
     .out(rst_int)
 );
+
+
+reg [19:0] delay_reg = 20'hfffff;
+
+reg [4:0] mdio_cmd_phy_addr = 5'h07;
+reg [4:0] mdio_cmd_reg_addr = 5'h00;
+reg [15:0] mdio_cmd_data = 16'd0;
+reg [1:0] mdio_cmd_opcode = 2'b01;
+reg mdio_cmd_valid = 1'b0;
+wire mdio_cmd_ready;
+
+reg [3:0] state_reg = 0;
+
+//1 reg 4 = DE0 
+//2 reg 4 = DE1 
+//1 reg 9 = 300 
+//2 reg 9 = 300 
+//1 reg 16 = 0 
+//2 reg 16 = 0 
+//1 reg 10 = 7800 
+//2 reg 10 = 7800 
+//1 reg 0 = 1200 
+//2 reg 0 = 1340 
+//1 reg 0 = 8000 
+//2 reg 0 = 9140
+
+//XAxiEthernet_PhyWrite(xaxiemacp, phy_addr, 0x04, 0x0DE1);
+//XAxiEthernet_PhyWrite(xaxiemacp, phy_addr, 0x09, 0x0300);
+//XAxiEthernet_PhyWrite(xaxiemacp, phy_addr, 0x16, 0x0000);
+//XAxiEthernet_PhyWrite(xaxiemacp, phy_addr, 0x10, 0x7800);
+//XAxiEthernet_PhyWrite(xaxiemacp, phy_addr, 0x00, 0x1340);
+//XAxiEthernet_PhyWrite(xaxiemacp, phy_addr, 0x00, 0x9140);
+
+//sleep(5); 
+
+always @(posedge clk_int) begin
+
+        if (rst_int) begin
+            state_reg <= 0;
+            delay_reg <= 20'hfffff;
+            mdio_cmd_reg_addr <= 5'h00;
+            mdio_cmd_data <= 16'd0;
+            mdio_cmd_valid <= 1'b0;
+        end else begin
+            mdio_cmd_valid <= mdio_cmd_valid & !mdio_cmd_ready;
+            if (delay_reg > 0) begin
+                delay_reg <= delay_reg - 1;
+            end else if (!mdio_cmd_ready) begin
+                // wait for ready
+                state_reg <= state_reg;
+            end else begin
+                mdio_cmd_valid <= 1'b0;
+                case (state_reg)
+                    4'd0: begin
+                        //reg 0x0 = 0x9140 
+                        //mdio_cmd_reg_addr <= 5'h00;
+                        //mdio_cmd_data <= 16'h9140;
+                        //mdio_cmd_valid <= 1'b1;
+                        state_reg <= 4'd1;
+                    end
+                    4'd1: begin
+                        //reg 0x4 = 0xDE1
+                        mdio_cmd_reg_addr <= 5'h04;
+                        //mdio_cmd_data <= 16'h0DE0;
+                        mdio_cmd_data <= 16'h0DE1;
+                        mdio_cmd_valid <= 1'b1;
+                        state_reg <= 4'd2;
+                    end
+                    4'd2: begin
+                        //reg 0x9 = 0x300
+                        mdio_cmd_reg_addr <= 5'h09;
+                        mdio_cmd_data <= 16'h0300;
+                        mdio_cmd_valid <= 1'b1;
+                        state_reg <= 4'd3;
+                    end
+                    4'd3: begin
+                        //reg 0x16 = 0x0
+                        mdio_cmd_reg_addr <= 5'h16;
+                        mdio_cmd_data <= 16'h0000;
+                        mdio_cmd_valid <= 1'b1;
+                        state_reg <= 4'd4;
+                    end
+                    4'd4: begin
+                        //reg 0x10 = 0x7800
+                        mdio_cmd_reg_addr <= 5'h10;
+                        mdio_cmd_data <= 16'h7800;
+                        mdio_cmd_valid <= 1'b1;
+                        state_reg <= 4'd5;
+                    end
+                    4'd5: begin
+                        //reg 0x0 = 0x1340
+                        mdio_cmd_reg_addr <= 5'h00;
+                        //mdio_cmd_data <= 16'h1200;
+                        mdio_cmd_data <= 16'h1340;
+                        mdio_cmd_valid <= 1'b1;
+                        state_reg <= 4'd6;
+                    end
+                    4'd6: begin
+                        //reg 0x0 = 0x9140
+                        mdio_cmd_reg_addr <= 5'h00;
+                        //mdio_cmd_data <= 16'h8000;
+                        mdio_cmd_data <= 16'h9140;
+                        mdio_cmd_valid <= 1'b1;
+                        state_reg <= 4'd7;
+                    end
+                    4'd7: begin
+                        // done
+                        state_reg <= 4'd7;
+                    end
+                endcase
+            end
+     end
+end
+
+wire mdc;
+wire mdio_i;
+wire mdio_o;
+wire mdio_t;
+
+mdio_master
+mdio_master_inst (
+    .clk(clk_int),
+    .rst(rst_int),
+
+    .cmd_phy_addr(mdio_cmd_phy_addr),
+    .cmd_reg_addr(mdio_cmd_reg_addr),
+    .cmd_data(mdio_cmd_data),
+    .cmd_opcode(mdio_cmd_opcode),
+    .cmd_valid(mdio_cmd_valid),
+    .cmd_ready(mdio_cmd_ready),
+
+    .data_out(),
+    .data_out_valid(),
+    .data_out_ready(1'b1),
+
+    .mdc_o(mdc),
+    .mdio_i(mdio_i),
+    .mdio_o(mdio_o),
+    .mdio_t(mdio_t),
+
+    .busy(),
+
+    .prescale(8'd3)
+);
+
+assign phy_mdc = mdc;
+assign mdio_i = phy_mdio;
+assign phy_mdio = mdio_t ? 1'bz : mdio_o;
 
 
 // IODELAY elements for RGMII interface to PHY
